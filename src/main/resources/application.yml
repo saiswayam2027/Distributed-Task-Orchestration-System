@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: task-orchestrator
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:orchestrator}
+    username: ${DB_USER:orchestrator}
+    password: ${DB_PASSWORD:orchestrator}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+orchestrator:
+  workers: ${WORKER_COUNT:4}
+  reaper-interval-ms: 10000
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+
+logging:
+  level:
+    com.saiswayam.orchestrator: INFO
