@@ -3,3 +3,6 @@ target/
 *.iml
 .vscode/
 .DS_Store
+
+# personal interview-prep notes -- never publish these
+PROJECT_JOURNEY.md

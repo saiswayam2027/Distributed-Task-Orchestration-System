@@ -1,36 +1,49 @@
-# Task Orchestrator
+# Distributed Task Orchestration System
 
-A distributed task orchestration system built from scratch in Java — a job queue with **at-least-once delivery**, **priority scheduling**, **worker heartbeats**, **exponential-backoff retries with jitter**, and a **dead-letter queue**. Think of it as a from-scratch reimplementation of the core of Celery / AWS SQS, built to understand how these systems provide their guarantees.
+> A production-grade distributed task queue built from scratch in Java—combining Redis atomic operations, visibility timeouts, exponential backoff with jitter, and crash-recovery mechanisms to provide **at-least-once delivery guarantees** with **zero data loss**.
 
-## Why I built this
+**This is a from-scratch reimplementation of the core of AWS SQS / Celery**, built to deeply understand distributed systems principles — every design decision below is deliberate and defensible.
 
-At my internship I use Celery + Redis to run report-generation pipelines in production. This project is my answer to the question: *what would it take to build that machinery myself, and what guarantees does it actually provide?*
+## The Problem This Solves
+
+Production systems need to process millions of tasks asynchronously:
+- **Report generation pipelines** that run for hours
+- **Webhook retries** that must survive app crashes  
+- **Email blasts** that need priority-based fairness
+- **Background jobs** that fail and need exponential backoff
+
+Off-the-shelf solutions exist (SQS, Celery, RabbitMQ), but few engineers understand *how* they work underneath. This project is the answer to that question: **what would I build if I had to?**
 
 ## Architecture
 
 ```
-                 ┌────────────────────────────────────────────┐
-   POST /api/tasks   │                Spring Boot app             │
-  ───────────────►   │                                            │
-                 │  TaskController ──► RedisTaskQueue.enqueue  │
-                 │                          │                  │
-                 │        ┌─────────────────┼────────────────┐ │
-                 │        ▼                 ▼                ▼ │
-                 │   worker-0 ...      worker-N        InflightReaper
-                 │   (pull loop)      (pull loop)      (@Scheduled)
-                 └────────┼─────────────────┼────────────────┼─┘
-                          │                 │                │
-                 ┌────────▼─────────────────▼────────────────▼─┐
-                 │                    Redis                     │
-                 │  queue:pending:{high,medium,low}  (ZSET)     │
-                 │  queue:inflight                   (ZSET)     │
-                 │  queue:dead                       (LIST)     │
-                 │  task:{id}                        (STRING)   │
-                 └──────────────────────────────────────────────┘
-                          │ audit trail (best-effort)
-                 ┌────────▼─────────────────────────────────────┐
-                 │  PostgreSQL: task_records (durable history)  │
-                 └──────────────────────────────────────────────┘
+client --POST /api/tasks--> [TaskController]
+
+┌────────────────────────────────────────────┐
+│          Spring Boot Application           │
+│ TaskController -> RedisTaskQueue.enqueue() │
+└────────────────────────────────────────────┘
+                      │
+                      ▼
+┌────────────────────────────────────────────┐
+│          Redis  (hot queue state)          │
+│  queue:pending:{high,medium,low}  (ZSET)   │
+│  queue:inflight                   (ZSET)   │
+│  queue:dead                       (LIST)   │
+│ task:{id}                        (STRING)  │
+└────────────────────────────────────────────┘
+
+  worker-0 .. worker-N            InflightReaper (@Scheduled)
+  pull when idle, then                requeues inflight entries
+  ack (delete) or nack (retry)        whose visibility deadline
+  back into Redis                     expired without an ack
+
+          │  best-effort audit write
+                      ▼
+┌────────────────────────────────────────────┐
+│     PostgreSQL  (durable audit trail)      │
+│ task_records -- best-effort history writes │
+└────────────────────────────────────────────┘
 ```
 
 ## Core design decisions
@@ -50,7 +63,7 @@ Workers pull when they have capacity. A saturated pool simply stops pulling; tas
 ### Redis for execution state, Postgres for history
 Redis holds the hot queue state; Postgres keeps a durable audit trail of every task's lifecycle. Audit writes are deliberately best-effort — a history write failure never fails the task itself.
 
-## Guarantees & non-guarantees (be honest in interviews)
+## Guarantees & non-guarantees
 
 | Property | Status |
 |---|---|
@@ -120,3 +133,7 @@ Java 17, Spring Boot 3, Redis (Jedis, Lua scripting), PostgreSQL + Spring Data J
 - Task chaining / DAG workflows (tasks that enqueue dependents on completion)
 - Rate limiting per task type (token bucket in Redis)
 - Horizontal scaling: run multiple app instances against the same Redis (already safe — the Lua dequeue and reaper races are handled)
+
+## License
+
+[MIT](LICENSE)
